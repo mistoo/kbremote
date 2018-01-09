@@ -1,3 +1,4 @@
+# coding: utf-8
 require "date"
 
 module KbRemote
@@ -9,8 +10,12 @@ module KbRemote
       @id = data[:fileGroupID]
       @name = data[:name]
       @awaiting_deployment = data[:awaitingDeployment]
-      @files = data[:files] || []
-      @files.sort_by!{ |f| f[:path] }
+      @files = data[:files]
+      @files.sort_by!{ |f| f[:path] } if @files
+    end
+
+    def to_hash
+      { fileGroupID: @id, name: @name, awaitingDeployment: @awaiting_deployment, files: @files }
     end
 
     def self.load(api, id)
@@ -45,7 +50,16 @@ module KbRemote
         data[prop] = val unless val.nil?
       end
       raise ArgumentError, "need at least one of #{props.join(', ')}" if props.size.zero?
-      @api.request(:patch, "#{API_URI}/#{@id}", body: data)
+      re = @api.request(:patch, "#{API_URI}/#{@id}", body: data)
+      re && re[:updated]
+    end
+
+    def awaiting_deployment?
+      !awaiting_deployment
+    end
+
+    def deploy_changes
+      patch(deploychanges: true)
     end
 
     def delete_file(path, remote_root: 'localcontent')
@@ -59,6 +73,8 @@ module KbRemote
       remote_path = "#{remote_directory}/#{remote_path}" if remote_directory
       remote_path = "#{remote_root}/#{remote_path}"
 
+      KbRemote.debug{ "uploading file #{path} => #{remote_path}" }
+
       data = {
         filegroupid: @id,
         path: remote_path,
@@ -71,15 +87,19 @@ module KbRemote
 
     def upload_dir(dirpath, remote_root: 'localcontent')
       remote_dir = File.basename(dirpath)
+      ok = true
       Dir.foreach(dirpath) do |filename|
-        puts "path #{filename}"
+        next if filename == '.' || filename == '..'
         path = File.join(dirpath, filename)
-        next unless File.file?(path)
-        ok = upload_file(path, remote_directory: remote_dir, remote_root: remote_root)
-        raise RuntimeError, "Upload #{path} to #{remote_dir} failed" unless ok
-        sleep 1                 # Too Many Requests
+        if File.file?(path)
+          ok = upload_file(path, remote_directory: remote_dir, remote_root: remote_root)
+        elsif File.directory?(path)
+          ok = upload_dir(path, remote_root: File.join(remote_root, File.basename(remote_dir)))
+        end
+        raise RuntimeError, "#{path}: upload failed" unless ok
+        #sleep 1                 # Too Many Requests (in demo mode?)
       end
-      true
+      ok
     end
   end
 end

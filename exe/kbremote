@@ -1,0 +1,313 @@
+#!/usr/bin/env ruby
+require 'fileutils'
+require 'json'
+require 'rubygems'
+require 'commander/import'
+require 'dotenv'
+require 'colorize'
+require 'kbremote'
+
+CONFIG = File.join(Dir.home, ".kbremoterc")
+
+module KbCli
+  extend self
+
+  def init(args, options)
+    key = args[0]
+    secret = args[1]
+    File.open(File.join(Dir.home, ".kbremoterc"), "w", 0600) do |file|
+      file.puts "KB_REMOTE_KEY=#{key}"
+      file.puts "KB_REMOTE_SECRET=#{secret}"
+    end
+  end
+
+  def load_conf
+    if File.exist?(CONFIG)
+      Dotenv.load(CONFIG)
+    else
+      puts "#{CONFIG}: no such file, to create one do:\n  $ kbremote init KB_REMOTE_KEY KB_REMOTE_SECRET"
+      exit!
+    end
+  end
+
+  def api
+    load_conf
+    key = ENV['KB_REMOTE_KEY']
+    secret = ENV['KB_REMOTE_SECRET']
+    KbRemote::API.new(key: key, secret: secret)
+  end
+
+  def ls(args, options)
+    api.devices.each do |device|
+      puts "#{device[:name]} (#{device[:id]}), last seen #{device[:lastContacted]}"
+      puts JSON.pretty_generate(device) if options.full
+    end
+  end
+
+  def group_ls(args, options)
+    api.device_groups.each do |g|
+      puts "#{g[:name]} (#{g[:deviceGroupID]}), #{g[:devices].size} device(s), profile ##{g[:profileID]}"
+      puts JSON.pretty_generate(g) if options.full
+    end
+  end
+
+  def filegroup_ls(args, options)
+    like = args.first
+    api.filegroups.each do |g|
+      next if like && !g.name.include?(like)
+      #puts "#{g[:name]} (#{g[:deviceGroupID]}), #{g[:devices].size} device(s), profile ##{g[:profileID]}"
+      #puts JSON.pretty_generate(g) #if options.full
+      status = g.awaiting_deployment ? 'awaiting deployment'.colorize(:yellow): 'deployed'.colorize(:green)
+      puts "#{g.name} (#{g.id}) [#{status}]"
+      if options.files
+        g = api.filegroup(g.id) # reload group with file listing
+        g.files.each do |e|
+          puts "   - #{e[:path]}"
+        end
+      end
+    end
+  end
+
+  def profile_ls(args, options)
+    like = args.first
+    api.profiles.each do |p|
+      next if like && !p[:name].include?(like)
+
+      puts "#{p[:name]} (#{p[:profileID]}), url #{p[:properties][:kioskUrl]}"
+      puts JSON.pretty_generate(p) if options.full
+      if options.files && p[:fileGroup]
+        fgroup = api.filegroup(p[:fileGroup][:fileGroupID])
+        fgroup.files.each do |e|
+          puts "   - #{e[:path]}"
+        end
+      end
+    end
+  end
+
+  def device_push(args, options)
+    id = args.shift
+    args.each do |action|
+      break unless api.device_push(id, action.to_sym)
+    end
+  end
+
+  def suffixed_name(name, suffix)
+    name.end_with?(suffix) ? name : "#{name}#{suffix}"
+  end
+
+  def profile_name(name)
+    suffixed_name(name, 'Profile')
+  end
+
+  def profile_find!(name)
+    name = profile_name(name)
+    profile = api.profiles.find{ |p| p[:name] == name }
+    if profile.nil?
+      raise ArgumentError, "#{name}: no such profile"
+    end
+    profile
+  end
+
+  def profile_update(args, options)
+    profile = profile_find!(args.first)
+    url = args[1] || options.url
+    api.patch_profile(profile[:profileID], kioskurl: url)
+  end
+
+  def devicegroup_create(args, options)
+    name = suffixed_name(args.first, 'Group')
+    if api.device_groups.any?{ |g| g[:name] == name }
+      raise ArgumentError, "#{name}: device group already exist"
+    end
+
+    profile = profile_find(name.sub(/Group$/, 'Profile'))
+
+    registration_key = api.create_device_group(name, profile_id: profile[:profileID])
+    puts registration_key
+  end
+
+  def filegroup_name(name)
+    suffixed_name(name, 'Files')
+  end
+
+  def filegroup_find!(name)
+    gname = filegroup_name(name)
+    group = api.filegroups.find{ |g| g.name == gname }
+    if group.nil?
+      raise ArgumentError, "#{gname}: no such group"
+    end
+    group
+  end
+
+  def filegroup_create(args, options)
+    group_name = filegroup_name(args.first)
+    profile = profile_find!(args.first)
+
+    re = api.create_filegroup(group_name)
+    puts re.to_json
+  end
+
+  def filegroup_deploy(args, options)
+    group = filegroup_find!(args.first)
+    group.deploy_changes unless group.awaiting_deployment?
+  end
+
+  def filegroup_upload(args, options)
+    name = args[0]
+    dest = 'localcontent'
+    if name.include?('/')
+      name, dest = name.split('/', 2)
+    end
+
+    path = args[1]
+    if !Dir.exist?(path) && !File.exist?(path)
+      raise ArgumentError, "#{path}: no such file or directory"
+    end
+
+    group = filegroup_find!(name)
+
+    ok = false
+    if Dir.exist?(path)
+      ok = group.upload_dir(path)
+    else
+      ok = group.upload_file(path)
+    end
+
+    if ok
+      group = api.filegroup(group.id)
+      group.files.each do |e|
+        puts " #{e[:path]}#{e[:isdir] ? '/' : ''}"
+      end
+    end
+  end
+end
+
+program :version, '0.0.1'
+program :description, 'KbRemote API client'
+program :help_formatter, :compact
+
+$verbosity = 0
+
+global_option('-d', 'Debug') do |level|
+  $verbosity = 1
+end
+
+global_option('--verbose LEVEL', 'Verbosity') do |level|
+  v = level.to_i || 1
+  $verbosity = v
+end
+
+def die(cmd, message)
+  print "error: ".colorize(:light_red)
+  puts "#{cmd}: #{message}"
+  exit 1
+end
+
+def ns_execute(cmd, args, options, min_args: 0)
+  if min_args > 0 && args.size < min_args
+    die(cmd, "command needs at least #{min_args} argument(s)")
+  end
+
+  r = KbCli.send(cmd.to_sym, args, options)
+  exit(1) if r == false || r.nil?
+  r
+end
+
+command :init do |c|
+  c.syntax = 'kbremote init KB_REMOTE_KEY KB_REMOTE_SECRET'
+  c.summary = 'Create $HOME/.kbremoterc'
+  c.action do |args, options|
+    ns_execute(:init, args, options, min_args: 2)
+  end
+end
+
+command :ls do |c|
+  c.syntax = 'kbremote ls'
+  c.summary = 'List devices'
+  c.option '-f', '--full', 'Full details'
+  c.action do |args, options|
+    ns_execute(:ls, args, options)
+  end
+end
+
+command :push do |c|
+  c.syntax = 'kbremote push DEVICE_ID ACTION...'
+
+  actions = []
+  KbRemote::API::PUSH_ACTIONS.each{ |k, v| actions.push(k) }
+  c.summary = "Push action to device"
+  c.description = "Available actions are: #{actions.join(', ')}"
+  c.action do |args, options|
+    ns_execute(:device_push, args, options, min_args: 2)
+  end
+end
+
+command 'profile ls' do |c|
+  c.syntax = 'kbremote profile ls'
+  c.summary = 'List profiles'
+  c.option '-f', '--full', 'Full details'
+  c.option '--files', 'List filegroup files'
+  c.action do |args, options|
+    ns_execute(:profile_ls, args, options)
+  end
+end
+
+command 'profile update' do |c|
+  c.syntax = 'kbremote profile update NAME URL'
+  c.summary = 'Update profile URL'
+  c.action do |args, options|
+    ns_execute(:profile_update, args, options, min_args: 2)
+  end
+end
+
+command 'group ls' do |c|
+  c.syntax = 'kbremote group ls [NAME..]'
+  c.summary = 'List device groups'
+  c.option '-f', '--full', 'Full details'
+  c.action do |args, options|
+    ns_execute(:group_ls, args, options)
+  end
+end
+
+command 'filegroup ls' do |c|
+  c.syntax = 'kbremote filegroup ls [NAME..]'
+  c.summary = 'List file groups'
+  c.option '-f', '--full', 'Full details'
+  c.option '--files', 'List files'
+  c.action do |args, options|
+    ns_execute(:filegroup_ls, args, options)
+  end
+end
+
+
+command 'group create' do |c|
+  c.syntax = 'kbremote group create NAME'
+  c.summary = 'Create device group'
+  c.action do |args, options|
+    ns_execute(:devicegroup_create, args, options, min_args: 1)
+  end
+end
+
+command 'filegroup create' do |c|
+  c.syntax = 'kbremote filegroup create NAME'
+  c.summary = 'Create file group'
+  c.action do |args, options|
+    ns_execute(:filegroup_create, args, options, min_args: 1)
+  end
+end
+
+command 'filegroup deploy' do |c|
+  c.syntax = 'kbremote filegroup deploy NAME'
+  c.summary = 'Deploy filegroup'
+  c.action do |args, options|
+    ns_execute(:filegroup_deploy, args, options, min_args: 1)
+  end
+end
+
+command 'upload' do |c|
+  c.syntax = 'kbremote upload NAME PATH'
+  c.summary = 'Upload files into filegroup'
+  c.action do |args, options|
+    ns_execute(:filegroup_upload, args, options, min_args: 2)
+  end
+end

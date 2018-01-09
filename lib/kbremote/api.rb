@@ -2,9 +2,17 @@
 require "date"
 require "json"
 require "rest-client"
-
 require_relative 'filegroup'
+
 module KbRemote
+  if ENV['KBREMOTE_DEBUG'] == '1'
+    def self.debug
+      STDERR.puts "[KBREMOTE_DEBUG] #{yield}"
+    end
+  else
+    def self.debug;end
+  end
+
   class API
     BASE_URL = 'https://www.kbremote.net'
     API_URI = '/api'
@@ -12,10 +20,6 @@ module KbRemote
     class Error < Exception; end
     class NotFound < Error; end
     class Forbidden < Error; end
-
-    #include HTTParty
-    #base_uri BASE_URL
-    #debug_output $stderr
 
     PUSH_ACTIONS = {
       request_status: 1,
@@ -43,7 +47,7 @@ module KbRemote
       regain_focus: 23
     }
 
-    def initialize(url: 'https://www.kbremote.net', key:, secret:, debug: false)
+    def initialize(url: 'https://www.kbremote.net', key:, secret:)
       raise ArgumentError, "url must be set" unless url
       raise ArgumentError, "key must be set" unless key
       raise ArgumentError, "secret must be set" unless secret
@@ -52,27 +56,29 @@ module KbRemote
       @api_key = key
       @api_secret = secret
       @uri = URI.parse(@api_url)
-      @debug = debug
     end
 
     def api_path(method_name)
       method_name.to_s.split('_').collect{ |s| s.capitalize!; s }.join
     end
 
-    def parse_response(re)
+    def parse_response(re, akey = nil)
       if re.is_a?(Array)
         re.collect!{ |e| parse_response(e) }
-
+      elsif re.is_a?(String) && (akey == :lastContacted || akey == :created)
+        re = DateTime.parse(re)
       elsif re.is_a?(Hash)
         o = {}
         re.each do |key, value|
-          key = "#{key[0].downcase}#{key[1..-1]}".to_sym
-          value = parse_response(value)
+          if key.upcase == key
+            key = key.downcase.to_sym
+          else
+            key = "#{key[0].downcase}#{key[1..-1]}".to_sym
+          end
+          value = parse_response(value, key)
           o[key] = value
         end
         re = o
-      elsif re.is_a?(String) && (key == :lastContacted || key == :created)
-        #re = DateTime.parse(re)
       end
       re
     end
@@ -83,11 +89,16 @@ module KbRemote
 
       headers = KbRemote::Auth.headers(meth, path, api_key: @api_key, api_secret: @api_secret)
       headers[:accept] = :json
-      headers[:content_type] = :json if body && as_json && body.is_a?(Hash)
+      if body && as_json && body.is_a?(Hash)
+        headers[:content_type] = :json
+        body = JSON.generate(body)
+      end
       headers[:params] = query if query # RestClient inconsitency
 
+      KbRemote.debug{ "#{meth.upcase} #{path}" }
+      KbRemote.debug{ "BODY #{body}" } if body
+
       re = RestClient::Request.execute(method: meth, url: "#{@api_url}#{path}", payload: body, headers: headers)
-      #re = self.class.send(meth, path, options)
       if re.code != 200
         case re.code
         when 404
@@ -98,8 +109,8 @@ module KbRemote
           raise Error, "#{re.code}"
         end
       end
-      #JSON.parse(re.body)
       data = JSON.parse(re.body)
+      KbRemote.debug{ "RESPONSE #{JSON.pretty_generate(data)}" }
       parse_response(data)
     rescue RestClient::TooManyRequests
       if as_json                # not multipart
@@ -128,14 +139,14 @@ module KbRemote
         data[prop] = val unless val.nil?
       end
       raise ArgumentError, "need at least one of #{props.join(', ')}" if props.size.zero?
-      puts data.inspect
       request(:patch, "device/#{id}", body: data)
     end
 
     def device_push(id, action)
       ano = PUSH_ACTIONS[action]
       raise ArgumentError, "#{action}: no such action" unless ano
-      request(:get, "push/#{id}/#{ano}")
+      re = request(:get, "push/#{id}/#{ano}")
+      re && re[:pushed]
     end
 
     def device_groups
@@ -154,7 +165,7 @@ module KbRemote
       }
       re = request(:post, "devicegroup", :body => body)
       # response { created: true, id: 7620, registrationkey: 5e8c1430-36cf-4c9f-89c0-6c961ae23f37 }
-      re
+      re[:registrationkey]
     end
 
     def profiles
@@ -166,7 +177,8 @@ module KbRemote
     end
 
     def patch_profile(id, kioskurl:)
-      request(:patch, "profile/#{id}", body: { kioskurl: kioskurl })
+      re = request(:patch, "profile/#{id}", body: { kioskurl: kioskurl })
+      re && re[:updated] == true
     end
 
     def filegroups

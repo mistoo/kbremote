@@ -5,7 +5,6 @@ module KbRemote
   module Auth
     def self.hmac(meth, timestamp, uri, secret)
       m = "#{meth.to_s.upcase}#{timestamp}#{uri}"
-      #puts m
       hash = OpenSSL::HMAC.digest('sha256', secret, m)
       sm = Base64.encode64(hash)
       sm
