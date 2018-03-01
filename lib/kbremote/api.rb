@@ -1,10 +1,12 @@
 # frozen_string_literal: true
 require "date"
 require "json"
-require "rest-client"
+require "tempfile"
+#require "rest-client"
 require_relative 'filegroup'
 
 module KbRemote
+  require 'rest-client'
   if ENV['KBREMOTE_DEBUG'] == '1'
     def self.debug
       STDERR.puts "[KBREMOTE_DEBUG] #{yield}"
@@ -66,7 +68,8 @@ module KbRemote
       if re.is_a?(Array)
         re.collect!{ |e| parse_response(e) }
       elsif re.is_a?(String) && (akey == :lastContacted || akey == :created)
-        re = DateTime.parse(re)
+        ts = "#{re} #{Time.now.getlocal.zone}" # add timezone as KB API gives localtime w/o tz
+        re = DateTime.parse(ts)
       elsif re.is_a?(Hash)
         o = {}
         re.each do |key, value|
@@ -142,10 +145,46 @@ module KbRemote
       request(:patch, "device/#{id}", body: data)
     end
 
-    def device_push(id, action)
+    def take_screenshot(device_id)
+      ano = PUSH_ACTIONS[:take_screenshot]
+
+      re = request(:get, "push/#{device_id}/#{ano}")
+      data = JSON.parse(re[:data], nil, :symbolize_names => true)
+      if data[:ImageUrl]
+        download_screenshot(id, data[:ImageUrl])
+      else
+        nil
+      end
+    end
+
+    def download_screenshot(device_id, url)
+      re = RestClient::Request.execute(method: :get, url: url)
+      if re.code != 200
+        case re.code
+        when 404
+          raise NotFound, "#{re.code}"
+        when 403
+          raise Forbidden, "#{re.code}"
+        else
+          raise Error, "#{re.code}"
+        end
+      end
+      file = Tempfile.new(device_id.to_s)
+      path = "#{device_id}.jpg"
+      file.write(re.body)
+      file.close
+      file.path
+    ensure
+      file.close if file
+    end
+    private :download_screenshot
+
+    def device_push(device_id, action)
+      raise ArgumentError, "#{action}: use take_screenshot method" if action == :take_screenshot
+
       ano = PUSH_ACTIONS[action]
       raise ArgumentError, "#{action}: no such action" unless ano
-      re = request(:get, "push/#{id}/#{ano}")
+      re = request(:get, "push/#{device_id}/#{ano}")
       re && re[:pushed]
     end
 
@@ -165,7 +204,7 @@ module KbRemote
       }
       re = request(:post, "devicegroup", :body => body)
       # response { created: true, id: 7620, registrationkey: 5e8c1430-36cf-4c9f-89c0-6c961ae23f37 }
-      re[:registrationkey]
+      re
     end
 
     def profiles
@@ -176,8 +215,27 @@ module KbRemote
       request(:get, "profile/#{id}")
     end
 
-    def patch_profile(id, kioskurl:)
-      re = request(:patch, "profile/#{id}", body: { kioskurl: kioskurl })
+    # {\"templateprofileid\":1,\"name\":\"My Profile\",\"description\":\"My Profile Description\"}
+    def create_profile(name, template_profile_id:, description: nil)
+      body = {
+        name: name,
+        templateprofileid: template_profile_id,
+        description: description
+      }
+      re = request(:post, "profile", :body => body)
+      re && re[:created] ? re[:id] : nil
+    end
+
+    def patch_profile(id, kioskurl: nil, filegroup_id: nil)
+      props = [ :kioskurl, :filegroup_id ]
+      data = {}
+      b = binding
+      props.each do |prop|
+        val = b.local_variable_get(prop)
+        data[prop] = val unless val.nil?
+      end
+      raise ArgumentError, "need at least one of #{props.join(', ')}" if props.size.zero?
+      re = request(:patch, "profile/#{id}", body: data)
       re && re[:updated] == true
     end
 
@@ -191,6 +249,11 @@ module KbRemote
 
     def create_filegroup(name)
       FileGroup.create(self, name)
+    end
+
+    #{\"devicegroupid\":1,\"notes\":\"My notes\"}
+    def registration_keys
+      request(:get, "registrationkey")
     end
   end
 end
