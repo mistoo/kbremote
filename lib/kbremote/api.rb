@@ -30,7 +30,7 @@ module KbRemote
       take_screenshot: 4, #device screenshot if Knox activated device (returned JSON includes Data & ImageURL value if available)**
       reload_url: 5,
       #6 = Open WiFi Settings
-      #7 = Identify device (show message box)
+      identify_device: 7, #7 = Identify device (show message box)
       #8 = Force Download Profile
       #9 = Download Profile (will only update if change has been detected)
       screen_off: 10,
@@ -149,9 +149,9 @@ module KbRemote
       ano = PUSH_ACTIONS[:take_screenshot]
 
       re = request(:get, "push/#{device_id}/#{ano}")
-      data = JSON.parse(re[:data], nil, :symbolize_names => true)
+      data = JSON.parse(re[:data], :symbolize_names => true)
       if data[:ImageUrl]
-        download_screenshot(id, data[:ImageUrl])
+        download_screenshot(device_id, data[:ImageUrl])
       else
         nil
       end
@@ -169,13 +169,11 @@ module KbRemote
           raise Error, "#{re.code}"
         end
       end
-      file = Tempfile.new(device_id.to_s)
-      path = "#{device_id}.jpg"
-      file.write(re.body)
-      file.close
-      file.path
-    ensure
-      file.close if file
+      path = Dir.tmpdir() + "/kbremote-screenshot-#{device_id}.jpg"
+      File.open(path, "wb") do |file|
+        file.write(re.body)
+      end
+      path
     end
     private :download_screenshot
 
