@@ -4,6 +4,7 @@ require "json"
 require "tempfile"
 #require "rest-client"
 require_relative 'filegroup'
+require_relative 'auth'
 
 module KbRemote
   require 'rest-client'
