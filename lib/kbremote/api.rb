@@ -26,7 +26,7 @@ module KbRemote
 
     PUSH_ACTIONS = {
       request_status: 1,
-      #2 = Update device info (information such as software version, Android version etc...)
+      update_info: 2, #2 = Update device info (information such as software version, Android version etc...)
       restart_app: 3,
       take_screenshot: 4, #device screenshot if Knox activated device (returned JSON includes Data & ImageURL value if available)**
       reload_url: 5,
@@ -113,6 +113,7 @@ module KbRemote
           raise Error, "#{re.code}"
         end
       end
+      KbRemote.debug{ "#{meth.upcase} #{path} #{re.code}" }
       data = JSON.parse(re.body)
       KbRemote.debug{ "RESPONSE #{JSON.pretty_generate(data)}" }
       parse_response(data)
@@ -150,11 +151,15 @@ module KbRemote
       ano = PUSH_ACTIONS[:take_screenshot]
 
       re = request(:get, "push/#{device_id}/#{ano}")
-      data = JSON.parse(re[:data], :symbolize_names => true)
-      if data[:ImageUrl]
-        download_screenshot(device_id, data[:ImageUrl])
-      else
+      unless re[:data]
         nil
+      else
+        data = JSON.parse(re[:data], :symbolize_names => true)
+        if data[:ImageUrl]
+          download_screenshot(device_id, data[:ImageUrl])
+        else
+          nil
+        end
       end
     end
 
