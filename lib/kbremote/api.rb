@@ -37,8 +37,11 @@ module KbRemote
       screen_off: 10,
       screen_on: 11,
       #12 = Open Kiosk Browser Settings
-      #13 = Open TeamViewer QuickSupport or TeamViewer Host (if installed)
+      open_settings: 12,
+      #13  =Open TeamViewer QuickSupport or TeamViewer Host (if installed)
+      open_teamviewer: 13,
       #14 = Exit Kiosk Browser
+      exit_app: 14,
       clear_cache_reload_url: 15,
       #15 = Clear WebView Cache and reload Kiosk Url
       #16 = Clear WebView Cookies and reload Kiosk Url
@@ -155,6 +158,7 @@ module KbRemote
         nil
       else
         data = JSON.parse(re[:data], :symbolize_names => true)
+        sleep 10
         if data[:ImageUrl]
           download_screenshot(device_id, data[:ImageUrl])
         else
