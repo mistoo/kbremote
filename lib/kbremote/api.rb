@@ -210,7 +210,7 @@ module KbRemote
         profileid: profile_id,
         createregistrationkey: create_registration_key
       }
-      re = request(:post, "devicegroup", :body => body)
+      re = request(:post, "devicegroup", body: body)
       # response { created: true, id: 7620, registrationkey: 5e8c1430-36cf-4c9f-89c0-6c961ae23f37 }
       re
     end
@@ -230,19 +230,16 @@ module KbRemote
         templateprofileid: template_profile_id,
         description: description
       }
-      re = request(:post, "profile", :body => body)
+      re = request(:post, "profile", body: body)
       re && re[:created] ? re[:id] : nil
     end
 
     def patch_profile(id, kioskurl: nil, filegroup_id: nil)
-      props = [ :kioskurl, :filegroup_id ]
+      props = [ :kioskurl, :filegroupid ]
       data = {}
-      b = binding
-      props.each do |prop|
-        val = b.local_variable_get(prop)
-        data[prop] = val unless val.nil?
-      end
-      raise ArgumentError, "need at least one of #{props.join(', ')}" if props.size.zero?
+      data[:kioskurl] = kioskurl if kioskurl
+      data[:filegroupid] = filegroup_id if filegroup_id
+      raise ArgumentError, "need at least one of #{props.join(', ')}" if data.size.zero?
       re = request(:patch, "profile/#{id}", body: data)
       re && re[:updated] == true
     end
