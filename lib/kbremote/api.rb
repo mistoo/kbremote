@@ -32,16 +32,13 @@ module KbRemote
       reload_url: 5,
       #6 = Open WiFi Settings
       identify_device: 7, #7 = Identify device (show message box)
-      #8 = Force Download Profile
-      #9 = Download Profile (will only update if change has been detected)
+      force_download_profile: 8, #8 = Force Download Profile
+      download_profile: 9, #9 = Download Profile (will only update if change has been detected)
       screen_off: 10,
       screen_on: 11,
-      #12 = Open Kiosk Browser Settings
-      open_settings: 12,
-      #13  =Open TeamViewer QuickSupport or TeamViewer Host (if installed)
-      open_teamviewer: 13,
-      #14 = Exit Kiosk Browser
-      exit_app: 14,
+      open_settings: 12, #12 = Open Kiosk Browser Settings
+      open_teamviewer: 13, #13  =Open TeamViewer QuickSupport or TeamViewer Host (if installed)
+      exit_app: 14, #14 = Exit Kiosk Browser
       clear_cache_reload_url: 15,
       #15 = Clear WebView Cache and reload Kiosk Url
       #16 = Clear WebView Cookies and reload Kiosk Url
